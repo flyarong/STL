@@ -152,20 +152,6 @@ _STL_DISABLE_CLANG_WARNINGS
 #endif // _ALLOW_RUNTIME_LIBRARY_MISMATCH
 #endif // __cplusplus
 
-#ifdef _ITERATOR_DEBUG_ARRAY_OVERLOADS
-#if _ITERATOR_DEBUG_ARRAY_OVERLOADS != 0 && _ITERATOR_DEBUG_ARRAY_OVERLOADS != 1
-#error _ITERATOR_DEBUG_ARRAY_OVERLOADS must be either 0 or 1.
-#elif _ITERATOR_DEBUG_LEVEL == 0 && _ITERATOR_DEBUG_ARRAY_OVERLOADS == 1
-#error _ITERATOR_DEBUG_LEVEL == 0 must imply _ITERATOR_DEBUG_ARRAY_OVERLOADS == 0.
-#endif
-#else // _ITERATOR_DEBUG_ARRAY_OVERLOADS
-#if _ITERATOR_DEBUG_LEVEL == 0
-#define _ITERATOR_DEBUG_ARRAY_OVERLOADS 0
-#else
-#define _ITERATOR_DEBUG_ARRAY_OVERLOADS 1
-#endif
-#endif // _ITERATOR_DEBUG_ARRAY_OVERLOADS
-
 #ifndef _CONTAINER_DEBUG_LEVEL
 #if _ITERATOR_DEBUG_LEVEL == 0
 #define _CONTAINER_DEBUG_LEVEL 0
@@ -184,6 +170,19 @@ _STL_DISABLE_CLANG_WARNINGS
         _CRT_SECURE_INVALID_PARAMETER(mesg); \
     } while (false)
 
+#ifdef __clang__
+#define _STL_VERIFY(cond, mesg)                                                            \
+    _Pragma("clang diagnostic push") _Pragma("clang diagnostic ignored \"-Wassume\"") do { \
+        if (cond) { /* contextually convertible to bool paranoia */                        \
+        } else {                                                                           \
+            _STL_REPORT_ERROR(mesg);                                                       \
+        }                                                                                  \
+                                                                                           \
+        _Analysis_assume_(cond);                                                           \
+    }                                                                                      \
+    while (false)                                                                          \
+    _Pragma("clang diagnostic pop")
+#else // ^^^ Clang // MSVC vvv
 #define _STL_VERIFY(cond, mesg)                                     \
     do {                                                            \
         if (cond) { /* contextually convertible to bool paranoia */ \
@@ -193,6 +192,7 @@ _STL_DISABLE_CLANG_WARNINGS
                                                                     \
         _Analysis_assume_(cond);                                    \
     } while (false)
+#endif // ^^^ MSVC ^^^
 
 #ifdef _DEBUG
 #define _STL_ASSERT(cond, mesg) _STL_VERIFY(cond, mesg)
@@ -201,10 +201,27 @@ _STL_DISABLE_CLANG_WARNINGS
 #endif // _DEBUG
 
 #ifdef _ENABLE_STL_INTERNAL_CHECK
-#define _STL_INTERNAL_CHECK(cond) _STL_VERIFY(cond, "STL internal check: " _CRT_STRINGIZE(cond))
+#define _STL_INTERNAL_CHECK(...)         _STL_VERIFY(__VA_ARGS__, "STL internal check: " #__VA_ARGS__)
+#define _STL_INTERNAL_STATIC_ASSERT(...) static_assert(__VA_ARGS__, #__VA_ARGS__)
 #else // ^^^ _ENABLE_STL_INTERNAL_CHECK ^^^ // vvv !_ENABLE_STL_INTERNAL_CHECK vvv
-#define _STL_INTERNAL_CHECK(cond) _Analysis_assume_(cond)
+#define _STL_INTERNAL_CHECK(...) _Analysis_assume_(__VA_ARGS__)
+#define _STL_INTERNAL_STATIC_ASSERT(...)
 #endif // _ENABLE_STL_INTERNAL_CHECK
+
+#ifndef _ENABLE_ATOMIC_REF_ALIGNMENT_CHECK
+#ifdef _DEBUG
+#define _ENABLE_ATOMIC_REF_ALIGNMENT_CHECK 1
+#else // ^^^ _DEBUG ^^^ // vvv !_DEBUG vvv
+#define _ENABLE_ATOMIC_REF_ALIGNMENT_CHECK 0
+#endif // _DEBUG
+#endif // _ENABLE_ATOMIC_REF_ALIGNMENT_CHECK
+
+#if _ENABLE_ATOMIC_REF_ALIGNMENT_CHECK
+#define _ATOMIC_REF_CHECK_ALIGNMENT(cond, mesg) _STL_VERIFY(cond, mesg)
+#else
+#define _ATOMIC_REF_CHECK_ALIGNMENT(cond, mesg) _Analysis_assume_(cond)
+#endif
+
 
 #include <use_ansi.h>
 
@@ -250,9 +267,9 @@ _STL_DISABLE_CLANG_WARNINGS
 
 #ifdef _CRTBLD
 // These functions are for enabling STATIC_CPPLIB functionality
-#define _cpp_stdin (__acrt_iob_func(0))
-#define _cpp_stdout (__acrt_iob_func(1))
-#define _cpp_stderr (__acrt_iob_func(2))
+#define _cpp_stdin         (__acrt_iob_func(0))
+#define _cpp_stdout        (__acrt_iob_func(1))
+#define _cpp_stderr        (__acrt_iob_func(2))
 #define _cpp_isleadbyte(c) (__pctype_func()[static_cast<unsigned char>(c)] & _LEADBYTE)
 #endif // _CRTBLD
 
@@ -291,18 +308,34 @@ _STL_DISABLE_CLANG_WARNINGS
 #endif // _CRTDATA2_IMPORT
 
 // INTEGER PROPERTIES
-#define _MAX_EXP_DIG 8 // for parsing numerics
-#define _MAX_INT_DIG 32
+#define _MAX_EXP_DIG    8 // for parsing numerics
+#define _MAX_INT_DIG    32
 #define _MAX_SIG_DIG_V1 36 // TRANSITION, ABI
 #define _MAX_SIG_DIG_V2 768
 
 // MULTITHREAD PROPERTIES
 // LOCK MACROS
-#define _LOCK_LOCALE 0
-#define _LOCK_MALLOC 1
-#define _LOCK_STREAM 2
-#define _LOCK_DEBUG 3
+#define _LOCK_LOCALE         0
+#define _LOCK_MALLOC         1
+#define _LOCK_STREAM         2
+#define _LOCK_DEBUG          3
 #define _LOCK_AT_THREAD_EXIT 4
+
+#ifndef _STD_ATOMIC_ALWAYS_USE_CMPXCHG16B
+#if _STL_WIN32_WINNT >= _STL_WIN32_WINNT_WINBLUE && defined(_WIN64)
+#define _STD_ATOMIC_ALWAYS_USE_CMPXCHG16B 1
+#else // ^^^ modern 64-bit // less modern or 32-bit vvv
+#define _STD_ATOMIC_ALWAYS_USE_CMPXCHG16B 0
+#endif // _STL_WIN32_WINNT >= _STL_WIN32_WINNT_WINBLUE && defined(_WIN64)
+#endif // _STD_ATOMIC_ALWAYS_USE_CMPXCHG16B
+
+#if _STD_ATOMIC_ALWAYS_USE_CMPXCHG16B == 0 && defined(_M_ARM64)
+#error ARM64 requires _STD_ATOMIC_ALWAYS_USE_CMPXCHG16B to be 1.
+#endif // _STD_ATOMIC_ALWAYS_USE_CMPXCHG16B == 0 && defined(_M_ARM64)
+
+#if _STD_ATOMIC_ALWAYS_USE_CMPXCHG16B == 1 && !defined(_WIN64)
+#error _STD_ATOMIC_ALWAYS_USE_CMPXCHG16B == 1 requires 64-bit.
+#endif // _STD_ATOMIC_ALWAYS_USE_CMPXCHG16B == 1 && !defined(_WIN64)
 
 #ifdef __cplusplus
 _STD_BEGIN
@@ -453,8 +486,7 @@ private:
     catch (...) {
 #define _CATCH_END }
 
-#define _RAISE(x) throw x
-#define _RERAISE throw
+#define _RERAISE  throw
 #define _THROW(x) throw x
 
 #else // _HAS_EXCEPTIONS

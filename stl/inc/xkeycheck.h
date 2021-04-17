@@ -6,7 +6,10 @@
 #pragma once
 #ifndef _XKEYCHECK_H
 #define _XKEYCHECK_H
-#include <yvals_core.h>
+
+// xkeycheck.h assumes that it's being included by yvals_core.h in a specific order.
+// Nothing else should include xkeycheck.h.
+
 #if _STL_COMPILER_PREPROCESSOR
 
 #if defined(__cplusplus) && !defined(_ALLOW_KEYWORD_MACROS) && !defined(__INTELLISENSE__)
@@ -295,7 +298,7 @@ Enable warning C4005 to find the forbidden define.
 #if defined(new) && defined(_ENFORCE_BAN_OF_MACRO_NEW)
 #define new EMIT WARNING C4005
 #error The C++ Standard Library forbids macroizing the keyword "new", though macroized new is supported on this \
-implementation as a nonstandard extension. Enable warning C4005 to find the forbidden define, or reenable the \
+implementation as a nonstandard extension. Enable warning C4005 to find the forbidden define, or re-enable the \
 extension by removing _ENFORCE_BAN_OF_MACRO_NEW.
 #endif // new
 

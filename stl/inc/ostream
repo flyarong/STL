@@ -101,20 +101,23 @@ public:
                 return;
             }
 
-
             _Tied->flush();
             _Ok = _Ostr.good(); // store test only after flushing tie
         }
 
         _STL_DISABLE_DEPRECATED_WARNING
         __CLR_OR_THIS_CALL ~sentry() noexcept {
-#if _HAS_EXCEPTIONS
-            if (!_STD uncaught_exception()) { // TRANSITION, OS#15518458
+#if !_HAS_EXCEPTIONS
+            const bool _Zero_uncaught_exceptions = true;
+#elif _HAS_DEPRECATED_UNCAUGHT_EXCEPTION
+            const bool _Zero_uncaught_exceptions = !_STD uncaught_exception(); // TRANSITION, ArchivedOS-12000909
+#else // ^^^ _HAS_DEPRECATED_UNCAUGHT_EXCEPTION / !_HAS_DEPRECATED_UNCAUGHT_EXCEPTION vvv
+            const bool _Zero_uncaught_exceptions = _STD uncaught_exceptions() == 0;
+#endif // !_HAS_DEPRECATED_UNCAUGHT_EXCEPTION
+
+            if (_Zero_uncaught_exceptions) {
                 this->_Myostr._Osfx();
             }
-#else // _HAS_EXCEPTIONS
-            this->_Myostr._Osfx();
-#endif // _HAS_EXCEPTIONS
         }
         _STL_RESTORE_DEPRECATED_WARNING
 
@@ -452,7 +455,7 @@ public:
         return *this;
     }
 
-#if _HAS_CXX17 // LWG 2221 "No formatted output operator for nullptr"
+#if _HAS_CXX17 // LWG-2221 "No formatted output operator for nullptr"
     template <class = void> // TRANSITION, ABI
     basic_ostream& operator<<(nullptr_t) { // insert a null pointer
         return *this << "nullptr";
@@ -912,14 +915,48 @@ basic_ostream<char, _Traits>& operator<<(
 }
 
 #ifdef __cpp_char8_t // These deleted overloads are specified in P1423.
+// don't insert a UTF-8 NTBS
 template <class _Traits>
-basic_ostream<char, _Traits>& operator<<(
-    basic_ostream<char, _Traits>&, const char8_t*) = delete; // don't insert a UTF-8 NTBS
+basic_ostream<char, _Traits>& operator<<(basic_ostream<char, _Traits>&, const char8_t*) = delete;
+template <class _Traits>
+basic_ostream<wchar_t, _Traits>& operator<<(basic_ostream<wchar_t, _Traits>&, const char8_t*) = delete;
+
+// don't insert a UTF-8 code unit
+template <class _Traits>
+basic_ostream<char, _Traits>& operator<<(basic_ostream<char, _Traits>&, char8_t) = delete;
+template <class _Traits>
+basic_ostream<wchar_t, _Traits>& operator<<(basic_ostream<wchar_t, _Traits>&, char8_t) = delete;
+#endif // __cpp_char8_t
+
+#if !_HAS_STREAM_INSERTION_OPERATORS_DELETED_IN_CXX20
+#ifdef _NATIVE_WCHAR_T_DEFINED
+template <class _Traits>
+basic_ostream<char, _Traits>& operator<<(basic_ostream<char, _Traits>&, wchar_t) = delete;
 
 template <class _Traits>
-basic_ostream<char, _Traits>& operator<<(
-    basic_ostream<char, _Traits>&, char8_t) = delete; // don't insert a UTF-8 code unit
-#endif // __cpp_char8_t
+basic_ostream<char, _Traits>& operator<<(basic_ostream<char, _Traits>&, const wchar_t*) = delete;
+#endif // _NATIVE_WCHAR_T_DEFINED
+
+template <class _Traits>
+basic_ostream<char, _Traits>& operator<<(basic_ostream<char, _Traits>&, char16_t) = delete;
+template <class _Traits>
+basic_ostream<char, _Traits>& operator<<(basic_ostream<char, _Traits>&, char32_t) = delete;
+
+template <class _Traits>
+basic_ostream<wchar_t, _Traits>& operator<<(basic_ostream<wchar_t, _Traits>&, char16_t) = delete;
+template <class _Traits>
+basic_ostream<wchar_t, _Traits>& operator<<(basic_ostream<wchar_t, _Traits>&, char32_t) = delete;
+
+template <class _Traits>
+basic_ostream<char, _Traits>& operator<<(basic_ostream<char, _Traits>&, const char16_t*) = delete;
+template <class _Traits>
+basic_ostream<char, _Traits>& operator<<(basic_ostream<char, _Traits>&, const char32_t*) = delete;
+
+template <class _Traits>
+basic_ostream<wchar_t, _Traits>& operator<<(basic_ostream<wchar_t, _Traits>&, const char16_t*) = delete;
+template <class _Traits>
+basic_ostream<wchar_t, _Traits>& operator<<(basic_ostream<wchar_t, _Traits>&, const char32_t*) = delete;
+#endif // !_HAS_STREAM_INSERTION_OPERATORS_DELETED_IN_CXX20
 
 template <class _Ostr, class _Ty, class = void>
 struct _Can_stream_out : false_type {};
@@ -929,9 +966,7 @@ struct _Can_stream_out<_Ostr, _Ty, void_t<decltype(_STD declval<_Ostr&>() << _ST
 };
 
 template <class _Ostr, class _Ty,
-    enable_if_t<conjunction_v< // prevent infinite recursion
-                    negation<is_lvalue_reference<_Ostr>>, is_base_of<ios_base, _Ostr>, _Can_stream_out<_Ostr, _Ty>>,
-        int> = 0>
+    enable_if_t<conjunction_v<is_convertible<_Ostr*, ios_base*>, _Can_stream_out<_Ostr, _Ty>>, int> = 0>
 _Ostr&& operator<<(_Ostr&& _Os, const _Ty& _Val) { // insert to rvalue stream
     _Os << _Val;
     return _STD move(_Os);
@@ -957,6 +992,45 @@ basic_ostream<_Elem, _Traits>& __CLRCALL_OR_CDECL flush(basic_ostream<_Elem, _Tr
     _Ostr.flush();
     return _Ostr;
 }
+
+#if _HAS_CXX20
+#ifdef _CPPRTTI
+template <class _Elem, class _Traits>
+basic_ostream<_Elem, _Traits>& emit_on_flush(basic_ostream<_Elem, _Traits>& _Ostr) {
+    const auto _Sync_buf_ptr = dynamic_cast<_Basic_syncbuf_impl<_Elem, _Traits>*>(_Ostr.rdbuf());
+    if (_Sync_buf_ptr) {
+        _Sync_buf_ptr->set_emit_on_sync(true);
+    }
+    return _Ostr;
+}
+
+template <class _Elem, class _Traits>
+basic_ostream<_Elem, _Traits>& noemit_on_flush(basic_ostream<_Elem, _Traits>& _Ostr) {
+    const auto _Sync_buf_ptr = dynamic_cast<_Basic_syncbuf_impl<_Elem, _Traits>*>(_Ostr.rdbuf());
+    if (_Sync_buf_ptr) {
+        _Sync_buf_ptr->set_emit_on_sync(false);
+    }
+    return _Ostr;
+}
+
+template <class _Elem, class _Traits>
+basic_ostream<_Elem, _Traits>& flush_emit(basic_ostream<_Elem, _Traits>& _Ostr) {
+    _Ostr.flush();
+    const auto _Sync_buf_ptr = dynamic_cast<_Basic_syncbuf_impl<_Elem, _Traits>*>(_Ostr.rdbuf());
+    if (_Sync_buf_ptr) {
+        _Sync_buf_ptr->_Do_emit();
+    }
+    return _Ostr;
+}
+#else // _CPPRTTI
+template <class _Elem, class _Traits>
+basic_ostream<_Elem, _Traits>& emit_on_flush(basic_ostream<_Elem, _Traits>&) = delete; // requires /GR option
+template <class _Elem, class _Traits>
+basic_ostream<_Elem, _Traits>& noemit_on_flush(basic_ostream<_Elem, _Traits>&) = delete; // requires /GR option
+template <class _Elem, class _Traits>
+basic_ostream<_Elem, _Traits>& flush_emit(basic_ostream<_Elem, _Traits>&) = delete; // requires /GR option
+#endif // _CPPRTTI
+#endif // _HAS_CXX20
 
 // INSERTER FOR error_category
 template <class _Elem, class _Traits>
